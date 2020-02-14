@@ -1,0 +1,21 @@
+[package]
+name = "spiffe-svid"
+version = "0.1.0"
+authors = ["dangerousplay <gm.davi.gm@live.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log = "0.4.8"
+rustls = "0.16.0"
+url = "2.1.1"
+anyhow = "1.0.26"
+thiserror = "1.0.10"
+webpki = "0.21.2"
+openssl = "0.10.28"
+
+[dev-dependencies]
+openssl = "0.10.28"
+rcgen = { version = "0.7.0", features = ["x509-parser"] }
+rand = "0.7.3"

@@ -1,16 +1,37 @@
 use thiserror::Error;
 use crate::url::SpiffeID;
 use openssl::x509::X509;
-use openssl::x509::X509Req;
 use std::borrow::Cow;
 use openssl::error::ErrorStack;
+use crate::url::ParseError as IDParseError;
+use openssl::nid::Nid;
+
+/// This represents a X509 SPIFFE Verifiable Identity Document (SVID).
+///
+/// A SVID can be either:
+/// * A leaf certificate is an SVID which serves to identify a caller or resource and are suitable
+/// for use in authentication processes. A leaf certificate is the only type which may serve to identify
+/// a resource or caller.
+/// * A signing certificate. A signing certificate MAY be used to issue further signing certificates in the same
+/// or different trust domains. Signing certificates MUST NOT be used for authentication purposes.
+/// They serve as validation material only, and may be chained together in typical X.509 fashion.
+///
+pub struct X509SVID {
+    cert_type: CertificateType,
+    inner: X509,
+    spiffe_id: SpiffeID
+}
 
 #[derive(Error, Debug)]
-pub enum ParseError<'a> {
-    #[error("Invalid SVID certificate: `{0}`")]
-    InvalidSVID(Cow<'a, str>),
+pub enum ParseError {
 
-    #[error("Invalid X509 certificate: `{0}`")]
+    #[error("Invalid X509 SVID: {0}")]
+    InvalidSVID(Cow<'static, str>),
+
+    #[error("Invalid X509 SVID: {0}")]
+    InvalidSPIFFEID(#[from] IDParseError),
+
+    #[error("Invalid X509 SVID: {0}")]
     InvalidX509(#[from] ErrorStack),
 }
 
@@ -19,39 +40,38 @@ pub enum CertificateType {
     Signing
 }
 
-/// This represents a SPIFFE Verifiable Identity Document (SVID).
-///
-/// A SVID can be either:
-///  * A leaf certificate is an SVID which serves to identify a caller or resource and are suitable
-///    for use in authentication processes. A leaf certificate is the only type which may serve to identify
-///    a resource or caller.
-///  * A signing certificate. A signing certificate MAY be used to issue further signing certificates in the same
-///    or different trust domains. Signing certificates MUST NOT be used for authentication purposes.
-///    They serve as validation material only, and may be chained together in typical X.509 fashion
-///
-pub struct SVID {
-    cert_type: CertificateType,
-    inner: X509,
-    spiffe_id: SpiffeID
+macro_rules! ensure_svid {
+    ($cond:expr, $fmt:expr, $($arg:tt)*) => {
+        if !$cond {
+            return Err(ParseError::InvalidSVID(format!($fmt, $($arg)*).into()));
+        }
+    };
+    ($cond:expr, $msg:literal $(,)?) => {
+        if !$cond {
+            return Err(ParseError::InvalidSVID(($msg).into()));
+        }
+    };
 }
 
-impl SVID {
+impl X509SVID {
 
-    pub fn from_der(der: &[u8]) -> Result<Self, ParseError<'static>> {
+    pub fn from_der(der: &[u8]) -> Result<Self, ParseError> {
         let certificate = X509::from_der(der)
-            .map_err(ParseError::InvalidX509)?;
+            .map_err(ParseError::from)?;
 
         Self::from_certificate(certificate)
     }
 
-    pub fn from_pem(pem: &[u8]) -> Result<Self, ParseError<'static>> {
+    pub fn from_pem(pem: &[u8]) -> Result<Self, ParseError> {
         let certificate = X509::from_pem(pem)
-            .map_err(ParseError::InvalidX509)?;
+            .map_err(ParseError::from)?;
 
         Self::from_certificate(certificate)
     }
 
-    pub fn from_certificate(cert: X509) -> Result<Self, ParseError<'static>> {
+    pub fn from_certificate(cert: X509) -> Result<Self, ParseError> {
+        let spiffe_id = validate_spiffe_id(&cert)?;
+
         unimplemented!()
     }
 
@@ -60,19 +80,42 @@ impl SVID {
         &self.spiffe_id
     }
 
+    pub fn is_leaf(&self) -> bool {
+        match self.cert_type {
+            CertificateType::Leaf => true,
+            _ => false
+        }
+    }
+
+    pub fn is_signing(&self) -> bool {
+        match self.cert_type {
+            CertificateType::Signing => true,
+            _ => false
+        }
+    }
+
+    pub fn inner_x509(&self) -> &X509 {
+        &self.inner
+    }
+
 }
 
-fn validate_svid(cert: &X509) -> Option<ParseError<'static>> {
-    let a = cert
+fn validate_svid(cert: &X509) -> Option<ParseError> {
 
     unimplemented!()
 }
 
-fn validate_as_leaf(cert: &X509) -> Option<ParseError<'static>> {
+fn validate_as_leaf(cert: &X509) -> Option<ParseError> {
+    let count = cert.subject_name().entries().count();
+
+    if count == 0 {
+
+    }
+
     unimplemented!()
 }
 
-fn validate_spiffe_id(cert: &X509) -> Result<SpiffeID, ParseError<'static>> {
+fn validate_spiffe_id(cert: &X509) -> Result<SpiffeID, ParseError> {
 
     //Necessary because of lifetime
     let sans = cert.subject_alt_names()
@@ -83,15 +126,16 @@ fn validate_spiffe_id(cert: &X509) -> Result<SpiffeID, ParseError<'static>> {
 
     let spiffe_id: SpiffeID = uri_sans
         .next()
-        .map(|uri| SpiffeID::new(uri))
+        .map(SpiffeID::new)
         .ok_or_else(|| ParseError::InvalidSVID("Doesn't has URI SAN".into()))?
-        .map_err(|e| ParseError::InvalidSVID(e.to_string().into()))?;
+        .map_err(ParseError::from)?;
 
-    let remaind: Vec<_> = uri_sans.collect();
+    let remained: Vec<_> = uri_sans.collect();
 
-    if !remaind.is_empty() {
-        return Err(ParseError::InvalidSVID(format!("More than one SAN URI Type found: {:?}", remaind).into()))
-    }
+    ensure_svid!(remained.is_empty(), "More than one SAN URI Type found: {:?}", remained);
+
+//    cert.extension_by_nid(Nid::SUBJECT_ALT_NAME)
+//        .collect();
 
     Ok(spiffe_id)
 }
